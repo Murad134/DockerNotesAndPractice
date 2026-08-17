@@ -1,4 +1,4 @@
-# Docker Complete Notes (Bangla)
+# Docker Complete Notes & Practice (Bangla)
 
 Docker হলো একটি open-source platform, যেটা application-কে container-এর মধ্যে package করে run করতে সাহায্য করে।
 
