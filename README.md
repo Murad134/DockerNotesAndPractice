@@ -218,3 +218,192 @@ Container start হলে defaultভাবে কোন command চালাব�
 
 ### B. One-line Summary
 Docker application-এর development, deployment এবং scaling সহজ করে। এটি consistent environment তৈরি করে, team collaboration সহজ করে এবং application দ্রুত ও reliable ভাবে deploy করতে সাহায্য করে।
+
+## Dockerfile-এর বাকি গুরুত্বপূর্ণ Instructions
+
+উপরের FROM, RUN, CMD ছাড়াও একটি real-world Dockerfile-এ আরও কিছু instruction লাগে:
+
+| Instruction | কাজ |
+|---|---|
+| `WORKDIR` | Container-এর ভিতরে একটি working directory set করে, যেখানে পরের সব command execute হবে। প্রতিবার `cd` লেখার দরকার হয় না। |
+| `COPY` | Host machine থেকে file/folder container-এর ভিতরে copy করে। |
+| `ADD` | `COPY`-এর মতোই, কিন্তু extra সুবিধা দেয়: remote URL থেকে file আনতে পারে এবং tar file automatically extract করতে পারে। সাধারণত `COPY` ব্যবহার করাই ভালো practice, `ADD` শুধু বিশেষ দরকারে। |
+| `ENV` | Container-এর ভিতরে environment variable set করে (যেমন `NODE_ENV=production`)। |
+| `ARG` | শুধু build-time-এ ব্যবহারযোগ্য variable define করে (image build হওয়ার পর থাকে না, `ENV`-এর মতো runtime-এ থাকে না)। |
+| `EXPOSE` | Container কোন port-এ listen করবে সেটা document করে (এটা নিজে port publish করে না, শুধু info দেয়)। |
+| `VOLUME` | একটি mount point তৈরি করে, যেখানে data container-এর বাইরে persist করা যায়। |
+| `ENTRYPOINT` | Container চালু হলে যে command mandatory ভাবে চলবে; `CMD` দিয়ে এর default arguments override করা যায়। |
+| `USER` | কোন user দিয়ে container-এর process চলবে সেটা set করে (root avoid করার জন্য ভালো practice)। |
+| `.dockerignore` | Dockerfile না হলেও এটি খুব গুরুত্বপূর্ণ ফাইল। `node_modules`, `.git`-এর মতো অপ্রয়োজনীয় file/folder build context-এ যাওয়া থেকে বাদ দেয়, ফলে image ছোট ও build দ্রুত হয়। |
+
+### CMD vs ENTRYPOINT — পার্থক্য
+
+| বিষয় | CMD | ENTRYPOINT |
+|---|---|---|
+| উদ্দেশ্য | Default command/arguments দেয় | Container-এর main executable ঠিক করে |
+| Override | `docker run` command-এ সহজেই override হয় | সহজে override হয় না, override করতে `--entrypoint` লাগে |
+| একসাথে ব্যবহার | `ENTRYPOINT` + `CMD` একসাথে ব্যবহার করলে `CMD`, `ENTRYPOINT`-এর default arguments হিসেবে কাজ করে | - |
+
+উদাহরণ:
+
+```dockerfile
+FROM node:18
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+ENV NODE_ENV=production
+EXPOSE 3000
+
+ENTRYPOINT ["node"]
+CMD ["server.js"]
+```
+
+## Multi-stage Build
+
+বড় application-এর ক্ষেত্রে image size কমানোর জন্য multi-stage build ব্যবহার করা হয়। একটি stage-এ code build করা হয়, আরেকটি lightweight stage-এ শুধু প্রয়োজনীয় output copy করে নেওয়া হয়। ফলে final image-এ build tools/dependencies থাকে না, image ছোট ও secure হয়।
+
+```dockerfile
+# Stage 1: Build
+FROM node:18 AS builder
+WORKDIR /app
+COPY . .
+RUN npm install && npm run build
+
+# Stage 2: Production
+FROM node:18-slim
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+CMD ["node", "dist/index.js"]
+```
+
+## Docker Volumes — Data Persistence
+
+Container বন্ধ বা delete হয়ে গেলে ভিতরের data সাধারণত হারিয়ে যায় (কারণ container-এর storage ephemeral)। এই সমস্যা সমাধানের জন্য Volume ব্যবহার করা হয়।
+
+| Type | কাজ |
+|---|---|
+| Volume | Docker নিজে manage করে (`docker volume create`), data persist করার জন্য সবচেয়ে recommended উপায়। |
+| Bind Mount | Host machine-এর নির্দিষ্ট folder সরাসরি container-এর সাথে mount করা হয় (development-এ খুব common)। |
+| tmpfs Mount | Data শুধু memory-তে থাকে, disk-এ write হয় না; container বন্ধ হলে data চলে যায়। |
+
+```bash
+# Named volume তৈরি ও ব্যবহার
+docker volume create mydata
+docker run -v mydata:/app/data my-image
+
+# Bind mount (host path : container path)
+docker run -v $(pwd):/app my-image
+```
+
+## Docker Networking
+
+Docker default ভাবে কয়েক ধরনের network mode দেয়:
+
+| Network Type | কাজ |
+|---|---|
+| Bridge (default) | একই host-এ থাকা containers একে অপরের সাথে communicate করতে পারে, isolated network। |
+| Host | Container সরাসরি host machine-এর network ব্যবহার করে, কোনো isolation থাকে না। |
+| None | Container-এর কোনো network access থাকে না। |
+| Custom/User-defined Bridge | নিজে network তৈরি করে নির্দিষ্ট containers-কে একসাথে connect করা যায়, এবং container-name দিয়ে একে অপরকে reach করা যায় (DNS resolution পাওয়া যায়)। |
+
+```bash
+docker network create my-network
+docker run --network=my-network --name=app1 my-image
+docker run --network=my-network --name=app2 my-image
+# app1 থেকে app2 কে "app2" নামে ping/connect করা যাবে
+```
+
+## Docker Compose — Multiple Containers একসাথে চালানো
+
+বাস্তবে অনেক application একাধিক container নিয়ে গঠিত হয় (যেমন: backend + database + cache)। প্রতিটা আলাদা `docker run` command দিয়ে চালানো ঝামেলার, তাই Docker Compose ব্যবহার করা হয়। একটি `docker-compose.yml` file-এ সব service define করে একসাথে চালানো যায়।
+
+```yaml
+version: "3.9"
+services:
+   app:
+      build: .
+      ports:
+         - "3000:3000"
+      environment:
+         - NODE_ENV=production
+      depends_on:
+         - db
+      volumes:
+         - .:/app
+
+   db:
+      image: mongo:6
+      ports:
+         - "27017:27017"
+      volumes:
+         - dbdata:/data/db
+
+volumes:
+   dbdata:
+```
+
+```bash
+docker compose up -d      # সব service background-এ চালু
+docker compose down       # সব service বন্ধ ও network remove
+docker compose logs -f    # সব service-এর logs দেখা
+```
+
+## Docker vs Virtual Machine (VM)
+
+| বিষয় | Docker Container | Virtual Machine |
+|---|---|---|
+| OS | Host OS-এর kernel share করে | নিজস্ব full guest OS থাকে |
+| Size | হালকা (MB-এর মধ্যে) | ভারী (GB-এর মধ্যে) |
+| Boot Time | সেকেন্ডের মধ্যে চালু হয় | মিনিট সময় লাগতে পারে |
+| Isolation | Process-level isolation | Hardware-level isolation, বেশি strong |
+| Performance | Native-এর কাছাকাছি, দ্রুত | Extra overhead থাকার কারণে তুলনামূলক ধীর |
+| Use Case | Microservices, CI/CD, lightweight deployment | Full OS দরকার হলে, strong isolation দরকার হলে |
+
+## গুরুত্বপূর্ণ Docker Commands (Cheat Sheet)
+
+Image সংক্রান্ত:
+
+```bash
+docker build -t myapp:1.0 .        # Dockerfile থেকে image build
+docker images                      # সব local image list
+docker rmi myapp:1.0               # Image delete
+docker pull nginx                  # Registry থেকে image pull
+docker push myapp:1.0              # Registry-তে image push
+```
+
+Container সংক্রান্ত:
+
+```bash
+docker run -d -p 8080:80 --name web nginx   # Detached mode-এ container চালানো, port mapping সহ
+docker ps                          # চলমান container list
+docker ps -a                       # সব container (বন্ধ সহ) list
+docker stop web                    # Container বন্ধ করা
+docker start web                   # Container আবার চালু করা
+docker restart web                 # Container restart
+docker rm web                      # Container delete
+docker exec -it web bash           # চলমান container-এর ভিতরে shell access
+docker logs -f web                 # Container-এর logs live দেখা
+docker inspect web                 # Container-এর বিস্তারিত detail (JSON)
+```
+
+System Cleanup:
+
+```bash
+docker system prune          # unused containers, networks, dangling images cleanup
+docker volume prune          # unused volumes remove
+docker image prune -a        # unused সব images remove
+```
+
+## Best Practices (সংক্ষেপে)
+
+- Base image যতটা সম্ভব ছোট রাখো (যেমন `alpine`, `slim` variant ব্যবহার করা)।
+- `.dockerignore` ফাইল ব্যবহার করে অপ্রয়োজনীয় file build context থেকে বাদ দাও।
+- একটি container-এ একটি main process/service রাখাই ভালো practice (single responsibility)।
+- Sensitive data (password, API key) সরাসরি Dockerfile-এ hard-code না করে environment variable বা secret manager ব্যবহার করো।
+- Layer caching-এর সুবিধা নিতে `COPY package.json` আগে করে `RUN npm install` করো, তারপর বাকি code `COPY` করো। ফলে code change হলেও dependency layer re-build হয় না।
+- Production-এ root user avoid করে `USER` instruction দিয়ে non-root user ব্যবহার করো।
